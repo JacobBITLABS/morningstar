@@ -1,0 +1,34 @@
+task: detection
+
+num_classes: 20
+remap_mscoco_category: False
+
+train_dataloader: 
+  type: DataLoader
+  dataset: 
+    type: CocoDetection
+    img_folder: ../../../DATASET/SDU-GAMODv4-old/scaled_dataset/train/droneview/
+    ann_file: ../../../DATASET/SDU-GAMODv4-old/supervised_annotations/aerial/aligned_ids/aerial_train_aligned_ids_w_indicator_with_perspective_with_points.json
+    transforms:
+      type: Compose
+      ops: ~
+  shuffle: True
+  batch_size: 8
+  num_workers: 4
+  drop_last: True 
+
+
+val_dataloader:
+  type: DataLoader
+  dataset: 
+    type: CocoDetection
+    img_folder: ../../../DATASET/SDU-GAMODv4-old/scaled_dataset/val/droneview/
+    ann_file: ../../../DATASET/SDU-GAMODv4-old/supervised_annotations/aerial/aligned_ids/aerial_valid_aligned_ids_w_indicator_with_points.json
+    transforms:
+      type: Compose
+      ops: ~ 
+
+  shuffle: False
+  batch_size: 8
+  num_workers: 4
+  drop_last: False

@@ -109,24 +109,24 @@ class CocoDetection(VisionDataset):
         # elif "ground" in path:
         #     joined_path = root + "/scaled_dataset/" + "train/groundview/" + path
 
-        # if self.imageset == 'train':
-        #     root = '../../SDU-GAMODv4-old'
-        #     if "droneView" in path:
-        #         joined_path = root + "/scaled_dataset/" + "train/droneview/" + path
-        #     elif "drone" in path:
-        #         joined_path = root + "/scaled_dataset/" + "train/droneview/" + path
-        #     elif "groundView" in path:
-        #         joined_path = root + "/scaled_dataset/" + "train/groundview/" + path
-        #     elif "ground" in path:
-        #         joined_path = root + "/scaled_dataset/" + "train/groundview/" + path
+        if self.imageset == 'train':
+            root = '../../SDU-GAMODv4-old'
+            if "droneView" in path:
+                joined_path = root + "/scaled_dataset/" + "train/droneview/" + path
+            elif "drone" in path:
+                joined_path = root + "/scaled_dataset/" + "train/droneview/" + path
+            elif "groundView" in path:
+                joined_path = root + "/scaled_dataset/" + "train/groundview/" + path
+            elif "ground" in path:
+                joined_path = root + "/scaled_dataset/" + "train/groundview/" + path
 
-        #     # print("joined_path: ", joined_path)
-        #     img = self.get_image(joined_path, override_path=True)
-        # else:
-        #     img = self.get_image(path, override_path=False)
+            # print("joined_path: ", joined_path)
+            img = self.get_image(joined_path, override_path=True)
+        else:
+            img = self.get_image(path, override_path=False)
         # print("joined_path: ", joined_path)
 
-        img = self.get_image(path, override_path=False)
+        #img = self.get_image(joined_path, override_path=True)
         if self.transforms is not None:
             img, target = self.transforms(img, target)
 

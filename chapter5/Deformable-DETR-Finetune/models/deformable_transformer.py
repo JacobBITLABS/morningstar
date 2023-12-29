@@ -177,14 +177,13 @@ class DeformableTransformer(nn.Module):
             init_reference_out = reference_points
 
         # decoder
-        hs, output_bf_ffn, inter_references = self.decoder(tgt, reference_points, memory,
+        hs, inter_references = self.decoder(tgt, reference_points, memory,
                                             spatial_shapes, level_start_index, valid_ratios, query_embed, mask_flatten)
 
         inter_references_out = inter_references
         if self.two_stage:
             return hs, init_reference_out, inter_references_out, enc_outputs_class, enc_outputs_coord_unact
-       
-        return hs, output_bf_ffn, init_reference_out, inter_references_out, None, None
+        return hs, init_reference_out, inter_references_out, None, None
 
 
 class DeformableTransformerEncoderLayer(nn.Module):
@@ -305,15 +304,12 @@ class DeformableTransformerDecoderLayer(nn.Module):
                                reference_points,
                                src, src_spatial_shapes, level_start_index, src_padding_mask)
         tgt = tgt + self.dropout1(tgt2)
-        norm_tgt = self.norm1(tgt) #  torch.Size([2, 900, 256])
+        tgt = self.norm1(tgt)
 
-        # print("DeformableTransformerDecoderLayer.tgt")
-        # print("Tgt Shape. ", tgt.size())
-    
         # ffn
-        tgt = self.forward_ffn(norm_tgt)
+        tgt = self.forward_ffn(tgt)
 
-        return tgt, norm_tgt
+        return tgt
 
 
 class DeformableTransformerDecoder(nn.Module):
@@ -332,7 +328,6 @@ class DeformableTransformerDecoder(nn.Module):
 
         intermediate = []
         intermediate_reference_points = []
-        intermediate_before_ffn = []
         for lid, layer in enumerate(self.layers):
             if reference_points.shape[-1] == 4:
                 reference_points_input = reference_points[:, :, None] \
@@ -340,7 +335,7 @@ class DeformableTransformerDecoder(nn.Module):
             else:
                 assert reference_points.shape[-1] == 2
                 reference_points_input = reference_points[:, :, None] * src_valid_ratios[:, None]
-            output, output_bf_ffn = layer(output, query_pos, reference_points_input, src, src_spatial_shapes, src_level_start_index, src_padding_mask)
+            output = layer(output, query_pos, reference_points_input, src, src_spatial_shapes, src_level_start_index, src_padding_mask)
 
             # hack implementation for iterative bounding box refinement
             if self.bbox_embed is not None:
@@ -358,12 +353,11 @@ class DeformableTransformerDecoder(nn.Module):
             if self.return_intermediate:
                 intermediate.append(output)
                 intermediate_reference_points.append(reference_points)
-                intermediate_before_ffn.append(output_bf_ffn)
 
         if self.return_intermediate:
-            return torch.stack(intermediate), torch.stack(intermediate_before_ffn), torch.stack(intermediate_reference_points)
+            return torch.stack(intermediate), torch.stack(intermediate_reference_points)
 
-        return output, output_bf_ffn, reference_points
+        return output, reference_points
 
 
 def _get_clones(module, N):

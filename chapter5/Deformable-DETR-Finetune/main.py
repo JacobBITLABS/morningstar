@@ -304,7 +304,6 @@ def main(args):
 
     print("Start training")
     start_time = time.time()
-    print("EPOCHS: start: ", args.start_epoch, " end: ", args.epochs )
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
             sampler_train.set_epoch(epoch)

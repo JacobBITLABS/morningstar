@@ -26,8 +26,7 @@ from .segmentation import (DETRsegm, PostProcessPanoptic, PostProcessSegm,
                            dice_loss, sigmoid_focal_loss)
 from .deformable_transformer import build_deforamble_transformer
 import copy
-# J 
-from util.contrastive_learning import Contrastive
+
 
 def _get_clones(module, N):
     return nn.ModuleList([copy.deepcopy(module) for i in range(N)])
@@ -155,11 +154,10 @@ class DeformableDETR(nn.Module):
         query_embeds = None
         if not self.two_stage:
             query_embeds = self.query_embed.weight
-        hs, output_bf_ffn, init_reference, inter_references, enc_outputs_class, enc_outputs_coord_unact = self.transformer(srcs, masks, pos, query_embeds)
+        hs, init_reference, inter_references, enc_outputs_class, enc_outputs_coord_unact = self.transformer(srcs, masks, pos, query_embeds)
 
         outputs_classes = []
         outputs_coords = []
-        outputs_output_bf_ffnss = []
         for lvl in range(hs.shape[0]):
             if lvl == 0:
                 reference = init_reference
@@ -167,8 +165,6 @@ class DeformableDETR(nn.Module):
                 reference = inter_references[lvl - 1]
             reference = inverse_sigmoid(reference)
             outputs_class = self.class_embed[lvl](hs[lvl])
-            # I think it should be like:
-            outputs_output_bf_ffn = output_bf_ffn[lvl]
             tmp = self.bbox_embed[lvl](hs[lvl])
             if reference.shape[-1] == 4:
                 tmp += reference
@@ -178,14 +174,12 @@ class DeformableDETR(nn.Module):
             outputs_coord = tmp.sigmoid()
             outputs_classes.append(outputs_class)
             outputs_coords.append(outputs_coord)
-            outputs_output_bf_ffnss.append(outputs_output_bf_ffn)
         outputs_class = torch.stack(outputs_classes)
         outputs_coord = torch.stack(outputs_coords)
-        outputs_output_bf_ffn = torch.stack(outputs_output_bf_ffnss)
 
-        out = {'pred_logits': outputs_class[-1], 'output_bf_ffn': output_bf_ffn, 'pred_boxes': outputs_coord[-1]}
+        out = {'pred_logits': outputs_class[-1], 'pred_boxes': outputs_coord[-1]}
         if self.aux_loss:
-            out['aux_outputs'] = self._set_aux_loss(outputs_class, outputs_coord, outputs_output_bf_ffn)
+            out['aux_outputs'] = self._set_aux_loss(outputs_class, outputs_coord)
 
         if self.two_stage:
             enc_outputs_coord = enc_outputs_coord_unact.sigmoid()
@@ -193,12 +187,12 @@ class DeformableDETR(nn.Module):
         return out
 
     @torch.jit.unused
-    def _set_aux_loss(self, outputs_class, outputs_coord, outputs_output_bf_ffn):
+    def _set_aux_loss(self, outputs_class, outputs_coord):
         # this is a workaround to make torchscript happy, as torchscript
         # doesn't support dictionary with non-homogeneous values, such
         # as a dict having both a Tensor and a list.
-        return [{'pred_logits': a, 'pred_boxes': b, "output_bf_ffn": c}
-                for a, b, c in zip(outputs_class[:-1], outputs_coord[:-1], outputs_output_bf_ffn[:-1])]
+        return [{'pred_logits': a, 'pred_boxes': b}
+                for a, b in zip(outputs_class[:-1], outputs_coord[:-1])]
 
 
 class SetCriterion(nn.Module):
@@ -222,24 +216,19 @@ class SetCriterion(nn.Module):
         self.weight_dict = weight_dict
         self.losses = losses
         self.focal_alpha = focal_alpha
-        # J
-        self.contrastive = Contrastive()
 
-    def loss_labels(self, outputs, targets, indices, num_boxes, aux, log=True):
+    def loss_labels(self, outputs, targets, indices, num_boxes, log=True):
         """Classification loss (NLL)
         targets dicts must contain the key "labels" containing a tensor of dim [nb_target_boxes]
         """
         assert 'pred_logits' in outputs
         src_logits = outputs['pred_logits']
-        device = src_logits.device
-        # print("src_logits: ", src_logits.size())
 
         idx = self._get_src_permutation_idx(indices)
-
-        target_classes_o = torch.cat([t["labels"][J] for t, (_, J) in zip(targets, indices)]) # permutation
+        target_classes_o = torch.cat([t["labels"][J] for t, (_, J) in zip(targets, indices)])
         target_classes = torch.full(src_logits.shape[:2], self.num_classes,
-                                    dtype=torch.int64, device=src_logits.device) # (bath_size, num_queries), filled with self.num_class
-        target_classes[idx] = target_classes_o # copy the target_classes into the correct positions 
+                                    dtype=torch.int64, device=src_logits.device)
+        target_classes[idx] = target_classes_o
 
         target_classes_onehot = torch.zeros([src_logits.shape[0], src_logits.shape[1], src_logits.shape[2] + 1],
                                             dtype=src_logits.dtype, layout=src_logits.layout, device=src_logits.device)
@@ -247,47 +236,7 @@ class SetCriterion(nn.Module):
 
         target_classes_onehot = target_classes_onehot[:,:,:-1]
         loss_ce = sigmoid_focal_loss(src_logits, target_classes_onehot, num_boxes, alpha=self.focal_alpha, gamma=2) * src_logits.shape[1]
-        
-        losses = {}
-        losses['loss_ce'] = loss_ce
-    
-        loss_contr_acum = torch.tensor(0.0).to(device)
-        if not aux:
-            embeddings_before_ffn = outputs['output_bf_ffn'][-1].detach() # grab the last of the 6'th #  (batch, num_queries=900, dim=256). 
-            # Extract predicted classes assigned by the Hungarian Matcher
-            permuted_target_classes = target_classes_o.detach() # tensor([9, 9, 8, 7, 8, 8, 9, 9, 9, 9, 8, 8, 8, 8, 7, 8, 8, 8, 8, 8, 9, 9, 9, 8, 7]), len: 25
-            #print("permuted_target_classes: ", permuted_target_classes, " num: ", len(permuted_target_classes))
-
-            # Get corresponding object queries from embeddings_before_ffn
-            selected_queries = embeddings_before_ffn[idx] #   torch.Size([25, 256])
-            # print("selected_queries: ", selected_queries, " size: ", selected_queries.size())
-            
-            # Get unique labels
-            unique_labels = torch.unique(permuted_target_classes)
-            # Find indexes for each unique label using list comprehension and item()
-            indexes_by_label = {label.item(): (permuted_target_classes == label).nonzero().squeeze() for label in unique_labels}
-
-            # Display indexes for each unique label
-            # for label, indexes in indexes_by_label.items():
-            #     print(f"Label {label}: Indexes {indexes.tolist()}")
-
-            # Calculate pairwise cosine similarity and average for each label
-            for label, indexes in indexes_by_label.items():
-                # print("label: ", label, " indexes: ", indexes)
-                if indexes.dim() == 0:
-                    indexes = indexes.view(1)
-                label_queries = selected_queries[indexes]
-                similarity_matrix = F.cosine_similarity(label_queries.unsqueeze(1), label_queries.unsqueeze(0), dim=2)
-                # Diagonal elements are self-similarities, exclude them and calculate average
-                diagonal_mask = ~torch.eye(len(indexes)).bool()
-                avg_similarity = similarity_matrix[diagonal_mask].mean()
-
-                avg_similarity = torch.nan_to_num(avg_similarity, nan=0.0)
-                # print(f"Label {label}: Average cosine similarity: {avg_similarity.item()}")
-                # print(avg_similarity)
-                loss_contr_acum += 1 - avg_similarity  #(1 - silhouette_score) / num_boxes
-
-            losses['loss_contr'] = loss_contr_acum  if loss_contr_acum is not 0 else torch.tensor(0.0).to(device)
+        losses = {'loss_ce': loss_ce}
 
         if log:
             # TODO this should probably be a separate loss, not hacked in this one here
@@ -295,7 +244,7 @@ class SetCriterion(nn.Module):
         return losses
 
     @torch.no_grad()
-    def loss_cardinality(self, outputs, targets, indices, num_boxes, aux):
+    def loss_cardinality(self, outputs, targets, indices, num_boxes):
         """ Compute the cardinality error, ie the absolute error in the number of predicted non-empty boxes
         This is not really a loss, it is intended for logging purposes only. It doesn't propagate gradients
         """
@@ -308,7 +257,7 @@ class SetCriterion(nn.Module):
         losses = {'cardinality_error': card_err}
         return losses
 
-    def loss_boxes(self, outputs, targets, indices, num_boxes, aux):
+    def loss_boxes(self, outputs, targets, indices, num_boxes):
         """Compute the losses related to the bounding boxes, the L1 regression loss and the GIoU loss
            targets dicts must contain the key "boxes" containing a tensor of dim [nb_target_boxes, 4]
            The target boxes are expected in format (center_x, center_y, h, w), normalized by the image size.
@@ -329,7 +278,7 @@ class SetCriterion(nn.Module):
         losses['loss_giou'] = loss_giou.sum() / num_boxes
         return losses
 
-    def loss_masks(self, outputs, targets, indices, num_boxes, aux):
+    def loss_masks(self, outputs, targets, indices, num_boxes):
         """Compute the losses related to the masks: the focal loss and the dice loss.
            targets dicts must contain the key "masks" containing a tensor of dim [nb_target_boxes, h, w]
         """
@@ -370,7 +319,7 @@ class SetCriterion(nn.Module):
         tgt_idx = torch.cat([tgt for (_, tgt) in indices])
         return batch_idx, tgt_idx
 
-    def get_loss(self, loss, outputs, targets, indices, num_boxes, aux=False, **kwargs):
+    def get_loss(self, loss, outputs, targets, indices, num_boxes, **kwargs):
         loss_map = {
             'labels': self.loss_labels,
             'cardinality': self.loss_cardinality,
@@ -378,7 +327,7 @@ class SetCriterion(nn.Module):
             'masks': self.loss_masks
         }
         assert loss in loss_map, f'do you really want to compute {loss} loss?'
-        return loss_map[loss](outputs, targets, indices, num_boxes, aux, **kwargs)
+        return loss_map[loss](outputs, targets, indices, num_boxes, **kwargs)
 
     def forward(self, outputs, targets):
         """ This performs the loss computation.
@@ -417,7 +366,7 @@ class SetCriterion(nn.Module):
                     if loss == 'labels':
                         # Logging is enabled only for the last layer
                         kwargs['log'] = False
-                    l_dict = self.get_loss(loss, aux_outputs, targets, indices, num_boxes, aux= True, **kwargs)
+                    l_dict = self.get_loss(loss, aux_outputs, targets, indices, num_boxes, **kwargs)
                     l_dict = {k + f'_{i}': v for k, v in l_dict.items()}
                     losses.update(l_dict)
 
@@ -435,7 +384,7 @@ class SetCriterion(nn.Module):
                 if loss == 'labels':
                     # Logging is enabled only for the last layer
                     kwargs['log'] = False
-                l_dict = self.get_loss(loss, enc_outputs, bin_targets, indices, num_boxes, aux= True, **kwargs)
+                l_dict = self.get_loss(loss, enc_outputs, bin_targets, indices, num_boxes, **kwargs)
                 l_dict = {k + f'_enc': v for k, v in l_dict.items()}
                 losses.update(l_dict)
 
@@ -518,7 +467,6 @@ def build(args):
     matcher = build_matcher(args)
     weight_dict = {'loss_ce': args.cls_loss_coef, 'loss_bbox': args.bbox_loss_coef}
     weight_dict['loss_giou'] = args.giou_loss_coef
-    weight_dict['loss_contr'] = args.giou_loss_coef
     if args.masks:
         weight_dict["loss_mask"] = args.mask_loss_coef
         weight_dict["loss_dice"] = args.dice_loss_coef
@@ -544,24 +492,3 @@ def build(args):
             postprocessors["panoptic"] = PostProcessPanoptic(is_thing_map, threshold=0.85)
 
     return model, criterion, postprocessors
-
-
-
-
-       # if not aux:
-        #     embeddings_before_ffn = outputs['output_bf_ffn'][-1] # grab the last of the 6'th
-        #     print("embeddings_before_ffn: ", embeddings_before_ffn.size())
-        #     # dim1 = idx[0]
-        #     # dim2 = idx[1]
-        #     # print("dim1: ", dim1)
-        #     # print("dim2: ", dim2)
-        #     selected_embeddings_before_ffn = embeddings_before_ffn[idx[0], idx[1]]
-        #     # print("[selected] embeddings_before_ffn: ", selected_embeddings_before_ffn.size())
-
-        #     if(len(selected_embeddings_before_ffn.size()) < 3):
-        #         selected_embeddings_before_ffn = selected_embeddings_before_ffn.unsqueeze(0)
-
-        #     # print("target_classes_o: ", target_classes_o)
-        #     silhouette_score = self.contrastive.get_silhouette(selected_embeddings_before_ffn, target_classes_o)
-            
-        #     losses['loss_contr'] = (1 - silhouette_score) / num_boxes

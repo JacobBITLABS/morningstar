@@ -193,9 +193,11 @@ def build(image_set, args):
             # "test": (root / "scaled_dataset" / "all_ground_images", root / 'supervised_annotations' / 'merged'  / 'aerial_ground_valid_aligned_ids_w_indicator.json'),
 
             # aerial
-            #"train": (root / 'scaled_dataset' / 'train' / 'droneview', root / 'supervised_annotations' / '6450_ground_8605_aerial_train_aligned_ids_w_indicator.json'),
-            "train": (root / 'scaled_dataset' / 'train' / 'droneview', root / 'supervised_annotations' / 'aerial' / 'aligned_ids' / 'aerial_train_aligned_ids_w_indicator.json'),
+            #"train": (root / 'scaled_dataset' / 'train' / 'droneview', root / 'supervised_annotations' / 'aerial' / 'aligned_ids' / 'aerial_train_aligned_ids_w_indicator.json'),
+            "train": (root / 'scaled_dataset' / 'train' / 'droneview', root / 'supervised_annotations' / '6450_ground_8605_aerial_train_aligned_ids_w_indicator.json'),
+
             "val": (root / 'scaled_dataset' / 'val' / 'droneview', root / 'supervised_annotations' / 'aerial' / 'aligned_ids' / 'aerial_valid_aligned_ids_w_indicator.json'),
+
             "test": (root / 'scaled_dataset' / 'test' / 'droneview', root / 'supervised_annotations' / 'aerial' / 'aligned_ids' / 'aerial_test_aligned_ids.json'),
 
         }   
